@@ -1,13 +1,13 @@
 <p align="center">
     <img alt="Static Badge" src="https://img.shields.io/badge/made%20by-ParusSmartHome-blue">
-    <img alt="Static Badge" src="https://img.shields.io/badge/version-v2.0%20Beta-green">
+    <img alt="Static Badge" src="https://img.shields.io/badge/version-v1.0%20Beta-green">
     <img alt="Static Badge" src="https://img.shields.io/badge/esphome min version-2025.7.5-red">
     <img alt="Static Badge" src="https://img.shields.io/badge/license-MIT-orange">
 </p>
 
-# Dehumidifier
+# Dehumidifier - Осушитель
 
-Управление осушителем воздуха на базе Home Assistant с визуальным контролем и таймерами.
+Управление осушителем воздуха на базе esp32 с ESPHome с визуальным контролем и таймерами.
 
 ## Описание
 
@@ -24,7 +24,7 @@
 - **Ручной режим** — прямое управление без автоматики.  
 - **Сохранение состояний** — система помнит настройки после перезапуска.
 
-## Экран управления (интерфейс)
+## Экран управления
 
 На панели отображаются:  
 - **Текущее значение влажности** (с датчика).  
