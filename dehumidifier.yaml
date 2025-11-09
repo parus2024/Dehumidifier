@@ -1,0 +1,1033 @@
+# GPIO16 - i2c SHT
+# GPIO17 - i2c SHT
+# GPIO1 - 
+# GPIO3 - 
+# GPIO14 - 
+# GPIO12 - Выход компрессор
+# GPIO13 - Выход вентилятор слабо
+# GPIO36 - Вход емкость воды - сенсор
+# GPIO27 - Выход вентилятор сильно
+# GPIO15 - LED разморозка
+# GPIO21 - LED емкость для воды
+# GPIO25 - LED таймер
+# GPIO26 - термометры DS18B20 (1-минус, 2 плюс 3,3в, 3- выход)
+# GPIO4 - dc_pin (Ao)
+# GPIO22 - reset_pin
+# GPIO18 - clk_pin (csk)
+# GPIO23 - mosi_pin
+# GPIO5 - cs_pin
+# GPIO2 - LED яркость дисплея
+# GPIO19 - Выход зумера
+# GPIO33 - LED вентилятор слабо
+# GPIO32 - LED вентилятор сильно
+# GPIO34 - кнопка влажность (с подняжкой)
+# GPIO0 - кнопка включение (с подтяжкой)
+# GPIO39 - кнопка таймер (с подтяжкой)
+# GPIO35 - кнопка скорость вентилятора (с подтяжкой)
+
+
+substitutions:
+  name: dehumidifier
+  friendly_name: dehumidifier
+  friendly_name_short: dehumidifier
+  version: "08.11.2025"
+  device_ip: 192.168.0.218
+  reboot_timeout: 0s
+  sda1: GPIO17
+  scl1: GPIO16
+
+#<<: !include attach/common/esphome.yaml 
+<<: !include attach/common/esp/wroom32_idf.yaml
+<<: !include attach/common/logger/debug.yaml
+<<: !include attach/common/api.yaml
+<<: !include attach/common/ota.yaml
+<<: !include attach/common/wifi.yaml
+<<: !include attach/common/web/web_server3.yaml
+<<: !include attach/common/bus/i2c_a.yaml
+<<: !include attach/common/color/base_color.yaml
+packages:
+  common: !include attach/packages/standart.yaml
+  time_sun: !include  attach/packages/time_sun.yaml
+
+globals: # Переменная значения длительности таймера в секундах
+  - id: timer_duration_value
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: timer_mode # Глобальная переменная страницы настройки таймера (0 = длительность таймера, 1 = автостарт).
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: humidity_mode # Глобальная переменная страницы настройки влажности (0 = значение влажности, 1 = автовлажность).
+    type: int
+    restore_value: no
+    initial_value: '0'
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  project:
+    name: esphome.${friendly_name}
+    version: ${version}
+  on_boot:
+    - priority: -100.0
+      then:
+        - if:
+            condition:
+              - binary_sensor.is_off: timer_state
+            then:
+              - text_sensor.template.publish:
+                  id: timer_remaining
+                  state: "Отключен"
+one_wire:
+  - platform: gpio
+    pin: GPIO22
+
+spi:
+  clk_pin: GPIO18 # sck
+  mosi_pin: GPIO23 # sda
+#  miso_pin: GPIOXX
+
+font:
+  - file: "fonts/icons_v2.ttf"
+    id: icons_v2_24
+    size: 24
+    bpp: 4
+    glyphs: [
+      "\U0000e938", # humidity 
+      "\U0000e939", # temperature 
+      "\U0000e903", # ключ рожковый
+    ]
+  - file: "fonts/icons_v2.ttf"
+    id: icons_v2_18
+    size: 18
+    bpp: 4
+    glyphs: [
+      "\U0000e938", # humidity 
+      "\U0000e939", # temperature 
+      "\U0000e903", # ключ рожковый
+    ]
+  - file: "fonts/arial.ttf"
+    id: arial_48
+    size: 48
+  - file: "fonts/arial.ttf"
+    id: arial_32
+    size: 32
+  - file: "fonts/arial.ttf"
+    id: arial_24
+    size: 24
+    glyphs: |-
+      ~*<>!?"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'éèàòùç/&ôœìïöñ
+  - file: "fonts/arial.ttf"
+    id: arial_18
+    size: 18
+    glyphs: |-
+      ~*<>!?"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'éèàòùç/&ôœìïöñ
+  - file: "fonts/arial.ttf"
+    id: arial_14
+    size: 14
+    glyphs: |-
+      ~*<>!?"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'éèàòùç/&ôœìïöñ
+
+display:
+  - platform: st7735
+    model: "INITR_18BLACKTAB"
+    id: my_display
+    reset_pin: GPIO14
+    cs_pin: GPIO5
+    dc_pin: GPIO4 # AO
+    rotation: 180
+    device_width: 128
+    device_height: 160
+    col_start: 0
+    row_start: 0
+    eight_bit_color: true
+    update_interval: 1s
+    pages:
+      - id: main_page
+        lambda: |-
+          it.printf(3, 5, id(icons_v2_24), cyan, "\U0000e938"); // Иконка "влажность"
+          it.printf(30, 0, id(arial_32), cyan, TextAlign::TOP_LEFT, "%.0f", id(room_humidity).state);
+          it.printf(65, 5, id(icons_v2_24), yellow, "\U0000e939"); // Иконка "температура"
+          it.printf(87, 0, id(arial_32), siren, TextAlign::TOP_LEFT, "%.0f", id(room_temperature).state);
+          it.printf(3, 35, id(arial_14), green, TextAlign::TOP_LEFT, "испаритель");
+          it.printf(85, 35, id(icons_v2_18), yellow, "\U0000e939"); // Иконка "температура"
+          it.printf(100, 30, id(arial_24), siren, TextAlign::TOP_LEFT, "%.0f°", id(temp_freon).state);
+          it.rectangle(0,  0, it.get_width(), it.get_height(), id(orange)); // рамка
+          // it.rectangle(0,  0, it.get_width(), it.get_height() /3, id(orange)); // рамка
+          //it.rectangle(0,  0, it.get_width(), it.get_height() /3, id(orange)); // рамка
+          it.line(0, it.get_height() /3, it.get_width(), it.get_height() /3, orange);
+          it.printf(3, 55, id(icons_v2_24), white, "\U0000e903"); // Иконка "настройки"
+          it.printf(35, 60, id(icons_v2_18), cyan, "\U0000e938"); // Иконка "влажность"
+          it.printf(55, 55, id(arial_24), siren, TextAlign::TOP_LEFT, "%.0f", id(humidity_target).state);
+          it.printf(90, 60, id(arial_14), green, TextAlign::TOP_LEFT, "цель");
+          // таймер
+          it.printf(3, 85, id(arial_14), green, TextAlign::TOP_LEFT, "таймер:");
+          it.printf(65, 78, id(arial_18), siren, TextAlign::TOP_LEFT, "%.0f min", id(timer_duration_number).state);
+          it.printf(58, 95, id(arial_14), siren, TextAlign::TOP_LEFT,  "%s", id(timer_remaining).state.c_str());
+          // автостарт
+          it.printf(3, 108, id(arial_14), green, TextAlign::TOP_LEFT, "автостарт:");
+          if (id(auto_start).state) {
+          it.printf(80, 105, id(arial_18), siren, TextAlign::TOP_LEFT, "вкл");
+          } else {
+              it.printf(80, 105, id(arial_18), siren, TextAlign::TOP_LEFT, "выкл");
+          }
+
+          auto time = id(homeassistant_time).now(); // ESPTime
+          it.strftime(3, 125, id(arial_14), green, TextAlign::TOP_LEFT, "%H:%M", time);
+          it.strftime(50, 125, id(arial_14), green, TextAlign::TOP_LEFT, "%Y-%m-%d", time);
+          it.printf(5, 142, id(arial_14), TextAlign::TOP_LEFT, "uptime:  %s", id(uptime_human).state.c_str());
+      - id: timer
+        lambda: |-
+          // таймер
+          it.printf(20, 1, id(arial_24), green, TextAlign::TOP_LEFT, "таймер:");
+          it.printf(15, 25, id(arial_18), siren, TextAlign::TOP_LEFT,  "%s", id(timer_remaining).state.c_str());
+          if (id(timer_mode) == 0) {
+          static int i = 0;
+          i++;
+          if ((i % 2) == 0) 
+          it.printf(15, 40, id(arial_32), siren, TextAlign::TOP_LEFT, "%.0f", id(timer_duration_number).state);
+          } else {
+              it.printf(15, 40, id(arial_32), siren, TextAlign::TOP_LEFT, "%.0f", id(timer_duration_number).state);
+          }
+          it.printf(70, 50, id(arial_18), green, TextAlign::TOP_LEFT, "минут");
+          // автостарт
+          if (id(timer_mode) == 1) {
+          static int i = 0;
+          i++;
+          if ((i % 2) == 0) 
+          it.printf(3, 77, id(arial_14), green, TextAlign::TOP_LEFT, "автостарт:");
+          } else {
+              it.printf(3, 77, id(arial_14), green, TextAlign::TOP_LEFT, "автостарт:");
+          }
+          if (id(auto_start).state) {
+          it.printf(75, 70, id(arial_24), siren, TextAlign::TOP_LEFT, "вкл");
+          } else {
+              it.printf(75, 70, id(arial_24), siren, TextAlign::TOP_LEFT, "выкл");
+          }
+          auto night_on_value = id(night_on).state_as_esptime();
+          char night_on_str[6];
+          night_on_value.strftime(night_on_str, sizeof(night_on_str), "%H:%M");
+          it.printf(3, 100, id(arial_14), green, TextAlign::TOP_LEFT, "включить");
+          it.printf(80, 100, id(arial_14), siren, TextAlign::TOP_LEFT, "%s", night_on_str);
+          auto night_off_value = id(night_off).state_as_esptime();
+          char night_off_str[6];
+          night_off_value.strftime(night_off_str, sizeof(night_off_str), "%H:%M");
+          it.printf(3, 115, id(arial_14), green, TextAlign::TOP_LEFT, "выключить");
+          it.printf(80, 115, id(arial_14), siren, TextAlign::TOP_LEFT, "%s", night_off_str);
+          auto day_on_value = id(day_on).state_as_esptime();
+          char day_on_str[6];
+          day_on_value.strftime(day_on_str, sizeof(day_on_str), "%H:%M");
+          it.printf(3, 130, id(arial_14), green, TextAlign::TOP_LEFT, "включить");
+          it.printf(80, 130, id(arial_14), siren, TextAlign::TOP_LEFT, "%s", day_on_str);
+          auto day_off_value = id(day_off).state_as_esptime();
+          char day_off_str[6];
+          day_off_value.strftime(day_off_str, sizeof(day_off_str), "%H:%M");
+          it.printf(3, 145, id(arial_14), green, TextAlign::TOP_LEFT, "выключить");
+          it.printf(80, 145, id(arial_14), siren, TextAlign::TOP_LEFT, "%s", day_off_str);
+      - id: humidity
+        lambda: |-
+          // влажность
+          it.printf(0, 5, id(arial_18), green, TextAlign::TOP_LEFT, "установленная");
+          it.printf(20, 30, id(arial_18), green, TextAlign::TOP_LEFT, "влажность");
+          it.printf(5, 70, id(icons_v2_24), cyan, "\U0000e938"); // Иконка "влажность"
+          if (id(humidity_mode) == 0) {
+          static int i = 0;
+          i++;
+          if ((i % 2) == 0) 
+          it.printf(40, 55, id(arial_48), siren, TextAlign::TOP_LEFT, "%.0f", id(humidity_target).state);
+          } else {
+              it.printf(40, 55, id(arial_48), siren, TextAlign::TOP_LEFT, "%.0f", id(humidity_target).state);
+          }
+          // автовлажность
+          if (id(humidity_mode) == 1) {
+          static int i = 0;
+          i++;
+          if ((i % 2) == 0) 
+          it.printf(3, 110, id(arial_18), green, TextAlign::TOP_LEFT, "автовлажность:");
+          } else {
+              it.printf(3, 110, id(arial_18), green, TextAlign::TOP_LEFT, "автовлажность:");
+          }
+          if (id(auto_humidity).state) {
+          it.printf(40, 130, id(arial_24), siren, TextAlign::TOP_LEFT, "вкл");
+          } else {
+              it.printf(40, 130, id(arial_24), siren, TextAlign::TOP_LEFT, "выкл");
+          }
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    icon: mdi:brightness-6
+    id: back_light
+    restore_mode: ALWAYS_ON
+  - platform: binary
+    name: "Water Full Led"
+    id: water_full_led
+    output: water_full_output
+    restore_mode: ALWAYS_OFF
+  - platform: binary
+    name: "Defrost"
+    id: defrost_led
+    output: defrost_output
+    restore_mode: ALWAYS_OFF
+  - platform: binary
+    name: "Timer"
+    id: timer_led
+    output: timer_output
+    restore_mode: ALWAYS_OFF
+  - platform: binary
+    name: "Kompressor LED"
+    id: kompressor_led
+    output: kompressor_led_output
+    restore_mode: ALWAYS_OFF
+  - platform: binary
+    name: "Fan Slow LED"
+    id: fan_slow_led
+    output: fan_slow_output
+    restore_mode: ALWAYS_OFF
+  - platform: binary
+    name: "Fan Fast LED"
+    id: fan_fast_led
+    output: fan_fast_output
+    restore_mode: ALWAYS_OFF
+output:
+  - platform: ledc
+    pin: GPIO2
+    id: backlight_pwm
+  - platform: gpio
+    pin: GPIO21
+    id: water_full_output
+  - platform: gpio
+    pin: GPIO15
+    id: defrost_output
+  - platform: gpio
+    pin: GPIO25
+    id: timer_output
+  - platform: gpio
+    pin: GPIO26
+    id: kompressor_led_output
+  - platform: gpio
+    pin: GPIO33
+    id: fan_slow_output
+  - platform: gpio
+    pin: GPIO32
+    id: fan_fast_output
+number:
+  - platform: template
+    name: "Humidity Target" # Установка влажности
+    id: humidity_target
+    mode: box
+    optimistic: true
+    unit_of_measurement: "%"
+    min_value: 30
+    max_value: 90
+    initial_value: 60
+    step: 1
+    restore_value: true
+  - platform: template
+    name: "Temp Defrost" # Установка температуры оттпайки
+    icon: mdi:thermometer-chevron-down
+    id: defrost_temp
+    mode: box
+    optimistic: true
+    unit_of_measurement: "°C"
+    min_value: 0
+    max_value: 15
+    initial_value: 3
+    step: 1
+    restore_value: true
+  - platform: template
+    name: "Kompressor Delay"
+    id: kompressor_delay_number
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: s
+    initial_value: 10
+    mode: box
+    min_value: 1
+    max_value: 100
+    step: 1
+  - platform: template
+    name: "Timer Duration"
+    id: timer_duration_number
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: min
+    mode: box
+    min_value: 1
+    max_value: 600
+    step: 1
+    on_value: 
+      then:
+        - globals.set:
+            id: timer_duration_value
+            value: !lambda return (int) x;
+        - if:
+            condition:
+              - script.is_running: dinamic_timer
+            then:
+              - script.stop: dinamic_timer
+              - script.stop: timer_tick
+              - script.execute: dinamic_timer
+              - script.execute: timer_tick
+switch:
+  - !include attach/common/switch/switch_night_climate.yaml
+  - !include attach/common/switch/switch_day_climate.yaml
+  - platform: template
+    name: 'Auto Humidity'
+    optimistic: true
+    id: auto_humidity
+    icon: "mdi:repeat"
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    name: 'Auto Start'
+    optimistic: true
+    id: auto_start
+    icon: "mdi:repeat"
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template
+    name: "Work"
+    icon: mdi:folder-text
+    id: work
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - if:
+            condition:
+              - switch.is_off: kompressor
+            then:
+              - switch.turn_on: kuler_slow
+              - script.execute: kompressor_delay
+    on_turn_off:
+      then:
+        - if:
+            condition:
+              - switch.is_on: kompressor
+            then:
+              - switch.turn_off: kompressor
+              - delay: 5s
+              - switch.turn_off: kuler_slow
+              - switch.turn_off: kuler_fast
+  - platform: template
+    name: "Timer"
+    icon: mdi:folder-text
+    id: timer_switch
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - light.turn_on: timer_led
+      - if:
+          condition:
+            - switch.is_off: work
+          then:
+            - switch.turn_on: work
+      - lambda: !lambda |-
+          id(timer_state).publish_state(true);
+      - script.execute: dinamic_timer
+    on_turn_off:
+      - delay: 2s
+      - light.turn_off: timer_led
+      - script.stop: dinamic_timer
+      - script.stop: timer_tick
+      - lambda: !lambda |-
+          id(timer_state).publish_state(false);
+      - if:
+          condition:
+            - switch.is_on: work
+          then:
+            - switch.turn_off: work
+  - platform: gpio
+    name: "Kompressor"
+    id: kompressor
+    restore_mode: ALWAYS_OFF
+    pin:
+      number: GPIO12
+      inverted: false
+    on_turn_on:
+      then:
+        - light.turn_on: kompressor_led
+    on_turn_off: 
+      then:
+        - light.turn_off: kompressor_led
+  - platform: gpio
+    name: "Kuler Slow"
+    id: kuler_slow
+    pin:
+      number: GPIO13
+      inverted: false
+    interlock: [kuler_fast]
+    on_turn_on:
+      then:
+        - light.turn_on: fan_slow_led
+    on_turn_off: 
+      then:
+        - light.turn_off: fan_slow_led
+  - platform: gpio
+    name: "Kuler Fast"
+    id: kuler_fast
+    pin:
+      number: GPIO27
+      inverted: false
+    interlock: [kuler_slow]
+    on_turn_on:
+      then:
+        - light.turn_on: fan_fast_led
+    on_turn_off: 
+      then:
+        - light.turn_off: fan_fast_led
+  - platform: gpio
+    name: "Bipper"
+    id: bipper
+    pin:
+      number: GPIO19
+      inverted: false
+    on_turn_on:
+      - delay: 200ms
+      - switch.turn_off: bipper
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0 # кнопка включения
+      inverted: true
+    name: "Start Stop"
+    id: start_stop
+    filters:
+      - delayed_on: 50ms
+    on_click:
+      then:
+        - switch.turn_on: bipper
+        - switch.toggle: work
+        - light.turn_on:
+            id: back_light
+            brightness: 100%
+  - platform: gpio
+    pin:
+      number: GPIO39 # кнопка включения таймера
+      inverted: true
+    name: "Timer Button"
+    id: timer_button
+    on_press:
+      then:
+        - delay: 3000ms  # задержка для определения удержания
+        - if:
+            condition:
+              display.is_displaying_page: timer
+            then:
+              - while:
+                  condition:
+                    binary_sensor.is_on: timer_button
+                  then:
+                    - number.increment: timer_duration_number
+                    - delay: 100ms  # задержка между шагами
+    on_multi_click:
+    - timing: # Одиночное короткое нажатие
+        - ON for at most 1s
+        - OFF for at least 0.5s
+      then:
+        - switch.turn_on: bipper
+        - if:
+            condition:
+              - display.is_displaying_page: main_page
+              - switch.is_on: timer_switch
+            then:
+              - switch.turn_off: timer_switch
+        - if:
+            condition:
+              - display.is_displaying_page: main_page
+              - switch.is_off: timer_switch
+            then:
+              - switch.turn_on: timer_switch
+        - if:
+            condition:
+              - display.is_displaying_page: timer
+              - lambda: 'return (id(timer_mode) == 0);'
+            then:
+              - number.increment: timer_duration_number
+              - delay: 100ms  # задержка между шагами
+        - if:
+            condition:
+              - display.is_displaying_page: timer
+              - lambda: 'return (id(timer_mode) == 1);'
+            then:
+              - switch.toggle: auto_start
+        - if:
+            condition:
+              - display.is_displaying_page: humidity
+              - lambda: 'return (id(humidity_mode) == 0);'
+            then:
+              - number.decrement: humidity_target
+              - delay: 100ms  # задержка между шагами
+    - timing: # Одиночное длительное нажатие
+        - ON for 1s to 3s
+        - OFF for at least 0.5s
+      then:
+        - if:
+            condition:
+              display.is_displaying_page: main_page
+            then:  
+              - display.page.show: timer
+            else:  
+              - display.page.show: main_page
+    - timing:  # Двойное нажатие
+        - ON for at most 1s
+        - OFF for at most 1s
+        - ON for at most 1s
+        - OFF for at least 0.5s
+      then:
+        - if:
+            condition:
+              display.is_displaying_page: timer
+            then:
+              - if:
+                  condition:
+                    - lambda: 'return (id(timer_mode) == 0);'
+                  then:
+                    - globals.set: # Перейти к следующему режиму настройки
+                        id: timer_mode
+                        value: '1'
+                  else:
+                    - globals.set:
+                        id: timer_mode
+                        value: '0'
+  - platform: gpio
+    pin:
+      number: GPIO34 # Кнопка установки влажности
+      inverted: true
+    name: "Humidity Button"
+    id: humidity_button
+    filters:
+      - delayed_on: 50ms
+    on_press:
+      then:
+        - delay: 3000ms  # задержка для определения удержания
+        - if:
+            condition:
+              display.is_displaying_page: timer
+            then:
+              - while:
+                  condition:
+                    binary_sensor.is_on: humidity_button
+                  then:
+                    - number.decrement: timer_duration_number
+                    - delay: 100ms  # задержка между шагами
+        - if:
+            condition:
+              display.is_displaying_page: humidity
+            then:
+              - while:
+                  condition:
+                    binary_sensor.is_on: humidity_button
+                  then:
+                    - number.decrement: humidity_target
+                    - delay: 100ms  # задержка между шагами
+    on_multi_click:
+    - timing: # Одиночное короткое нажатие
+        - ON for at most 1s
+        - OFF for at least 0.5s
+      then:
+        - switch.turn_on: bipper
+        - if:
+            condition:
+              - display.is_displaying_page: timer
+              - lambda: 'return (id(timer_mode) == 0);'
+            then:
+              - number.decrement: timer_duration_number
+              - delay: 100ms  # задержка между шагами
+        - if:
+            condition:
+              - display.is_displaying_page: humidity
+              - lambda: 'return (id(humidity_mode) == 0);'
+            then:
+              - number.decrement: humidity_target
+              - delay: 100ms  # задержка между шагами
+        - if:
+            condition:
+              - display.is_displaying_page: humidity
+              - lambda: 'return (id(humidity_mode) == 1);'
+            then:
+              - switch.toggle: auto_humidity
+    - timing: # Одиночное длительное нажатие
+        - ON for 1s to 3s
+        - OFF for at least 0.5s
+      then:
+        - if:
+            condition:
+              display.is_displaying_page: main_page
+            then:  
+              - display.page.show: humidity
+            else:  
+              - display.page.show: main_page
+    - timing:  # Двойное нажатие
+        - ON for at most 1s
+        - OFF for at most 1s
+        - ON for at most 1s
+        - OFF for at least 0.5s
+      then:
+        - if:
+            condition:
+              display.is_displaying_page: humidity
+            then:
+              - if:
+                  condition:
+                    - lambda: 'return (id(humidity_mode) == 0);'
+                  then:
+                    - globals.set:
+                        id: humidity_mode
+                        value: '1'
+                  else:
+                    - globals.set:
+                        id: humidity_mode
+                        value: '0'
+  - platform: gpio
+    pin:
+      number: GPIO36 # Датчик наполнения воды
+      inverted: false
+      mode:
+        input: true
+#      mode: INPUT_PULLUP
+    name: "Water Full Sensor"
+    id: water_full_sensor
+    filters:
+      - delayed_on: 50ms
+    on_press:
+      then:
+        - light.turn_on: water_full_led
+        - if:
+            condition:
+              - switch.is_on: work
+            then:
+              - switch.turn_off: work
+        - switch.turn_on: bipper
+        - delay: 500ms
+        - switch.turn_on: bipper    
+        - delay: 500ms
+        - switch.turn_on: bipper  
+    on_release: 
+      then:
+        - switch.turn_on: bipper 
+        - light.turn_off: water_full_led
+        
+  - platform: gpio
+    pin:
+      number: GPIO35 # Кнопка переключения скоростей
+      inverted: true
+    name: "Fan Speed Button"
+    id: fan_button
+    filters:
+      - delayed_on: 30ms
+    on_click:
+      min_length: 30ms
+      max_length: 500ms
+      then:
+        - switch.turn_on: bipper
+        - if:
+            condition:
+              switch.is_on: kuler_slow
+            then:
+              - switch.turn_off: kuler_slow
+              - delay: 500ms
+              - switch.turn_on: kuler_fast
+            else:  
+              - if:
+                  condition:
+                    switch.is_on: kuler_fast
+                  then:
+                    - switch.turn_off: kuler_fast
+                    - delay: 500ms
+                    - switch.turn_on: kuler_slow
+
+  - platform: template
+    id: timer_state
+    name: Timer State
+    icon: "mdi:clock-check"
+    on_release:
+      then:
+        - delay: 1s
+        - text_sensor.template.publish:
+            id: timer_remaining
+            state: "Отключен"
+sensor:
+  - platform: htu21d
+    model: htu21d
+    i2c_id: bus_a
+    temperature:
+      name: "Room Temperature"
+      id: room_temperature
+    humidity:
+      name: "Room Humidity"
+      id: room_humidity
+      on_value_range:
+        - below: !lambda 'return id(humidity_target).state;'
+          then:
+            - if:
+                condition:
+                  and:
+                    - switch.is_on: auto_humidity
+                    - switch.is_on: work
+                then:
+                  - switch.turn_off: work
+        - above: !lambda 'return (id(humidity_target).state);'
+          then:
+            - if:
+                condition:
+                  and:
+                    - switch.is_on: auto_humidity
+                    - switch.is_off: work
+                then:
+                  - switch.turn_on: work
+    update_interval: 15s
+  - platform: dallas_temp
+    address: 0xbc30adbd0164ff28
+    name: Temperature Freon
+    icon: mdi:thermometer
+    id: temp_freon
+    update_interval: 5s
+    filters:
+      - filter_out: NAN
+      - round: 1
+      - clamp:
+          min_value: 0
+          max_value: 100
+          ignore_out_of_range: true
+    on_value_range:
+      - below: !lambda 'return id(defrost_temp).state;'
+        then:
+          - switch.turn_off: kompressor
+          - light.turn_on: defrost_led
+      - above: !lambda 'return (id(defrost_temp).state + 3);'
+        then:
+          - light.turn_off: defrost_led
+          - if:
+              condition:
+                and:
+                  - binary_sensor.is_off: water_full_sensor
+                  - switch.is_on: work
+              then:
+                - script.execute: kompressor_delay
+text_sensor:
+  - name: "Timer Remaining"
+    id: timer_remaining
+    platform: template
+    icon: "mdi:clock-end"
+    update_interval: never
+script:
+  - id: kompressor_delay
+    then:
+      - if:
+          condition:
+            - switch.is_on: work
+            - binary_sensor.is_off: water_full_sensor
+          then:
+            - delay: !lambda |-
+                return (int) id(kompressor_delay_number).state * 1000;  // Переводим векунды в миллисекунды
+            - switch.turn_on: kompressor
+  - id: datetime_timeout
+#    mode: restart
+    then:
+      - if:
+          condition:
+            - binary_sensor.is_on: timer_state
+          then:
+            - globals.set:
+                id: timer_duration_value
+                value: !lambda return id(timer_duration_number).state * 60;
+            - script.execute: timer_tick
+            - delay: !lambda |-
+                return (int) id(timer_duration_number).state * 60 * 1000;  // Переводим минуты в миллисекунды
+            - lambda: !lambda |-
+                id(timer_state).publish_state(false);
+            - script.stop: timer_tick
+            - switch.turn_off:
+                id: work
+  - id: dinamic_timer
+#    mode: restart
+    then:
+      - if:
+          condition:
+            - binary_sensor.is_on: timer_state
+          then:
+            - globals.set:
+                id: timer_duration_value
+                value: !lambda return id(timer_duration_number).state * 60;
+            - script.execute: timer_tick
+            - delay: !lambda |-
+                return (int) id(timer_duration_number).state * 60 * 1000;  // Переводим минуты в миллисекунды
+            - lambda: !lambda |-
+                id(timer_state).publish_state(false);
+            - switch.turn_off:
+                id: timer_switch
+            - script.stop: timer_tick
+            - switch.turn_off:
+                id: work
+  - id: timer_tick
+    # Перезапускается каждую секунду, пока не остановим командой timer.stop()
+    mode: queued
+    then:
+# каждый tick это 1 секунда
+      - delay: 1s
+      - lambda: |-
+          id(timer_duration_value) -= 1;
+          // if (id(test_timer) ) {
+          //  id(timer_tick).execute();
+          // } else {
+          //  id(timer_tick).stop();
+          // }
+      - if:
+          condition:
+            lambda: return id(timer_state).state;
+          then:
+            - script.execute: timer_tick
+
+datetime:
+  - platform: template
+    id: night_on
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_climate_control
+    name: "Night ON"
+    icon: "mdi:clock-check"
+    optimistic: true
+    initial_value: "00:00:00"
+    restore_value: true
+    on_time:
+      then:
+        - if:
+            condition:
+              - switch.is_on: auto_start
+              - switch.is_on: switch_night
+              - switch.is_off: work
+              - binary_sensor.is_off: water_full_sensor
+            then:
+              - switch.turn_on: work
+              - lambda: !lambda |-
+                  id(timer_state).publish_state(true);
+  - platform: template
+    id: night_off
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_climate_control
+    name: "Night OFF"
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    initial_value: "07:00:00"
+    restore_value: true
+    on_time:
+      then:
+        - if:
+            condition:
+              - switch.is_on: switch_night
+              - switch.is_on: work
+            then:
+              - lambda: !lambda |-
+                  id(timer_state).publish_state(false);
+              - switch.turn_off:
+                  id: timer_switch
+              - script.stop: timer_tick
+              - switch.turn_off:
+                  id: work
+  - platform: template
+    id: day_on
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_climate_control
+    name: "Day ON"
+    icon: "mdi:clock-check"
+    optimistic: true
+    initial_value: "12:00:00"
+    restore_value: true
+    on_time:
+      then:
+        - if:
+            condition:
+              - switch.is_on: auto_start
+              - switch.is_on: switch_day
+              - switch.is_off: work
+              - binary_sensor.is_off: water_full_sensor
+            then:
+              - switch.turn_on: work
+              - lambda: !lambda |-
+                  id(timer_state).publish_state(true);
+  - platform: template
+    id: day_off
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_climate_control
+    name: "Day OFF"
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    initial_value: "19:00:00"
+    restore_value: true
+    on_time:
+      then:
+        - if:
+            condition:
+              - switch.is_on: switch_day
+              - switch.is_on: work
+            then:
+              - lambda: !lambda |-
+                  id(timer_state).publish_state(false);
+              - switch.turn_off:
+                  id: timer_switch
+              - script.stop: timer_tick
+              - switch.turn_off:
+                  id: work
+
+interval:
+  - interval: 1s
+    then:
+      if:
+        condition:
+          lambda: 'return id(timer_state).state;'
+        then:
+          - text_sensor.template.publish:
+              id: timer_remaining
+              state: !lambda |-
+                char buff[20];
+                int _remaining_sec = id(timer_duration_value);
+                int hr = _remaining_sec / 3600;
+                int min = (_remaining_sec % 3600) / 60;
+                int sec = _remaining_sec % 60;
+                snprintf(buff, sizeof(buff), "%02d:%02d:%02d", hr, min, sec);
+                return {buff};
+  - interval: 30s
+    then:
+      if:
+        condition:
+          lambda: 'return (id(work).state && !id(kuler_slow).state && !id(kuler_fast).state) ;'
+        then:
+          - switch.turn_on: kuler_slow
+  - interval: 300s
+    then:
+      - if:
+          condition:
+            for:
+              time: 290s
+              condition:
+                or:
+                  - display.is_displaying_page:
+                      id: my_display
+                      page_id: timer
+                  - display.is_displaying_page:
+                      id: my_display
+                      page_id: humidity
+          then:
+            - display.page.show: main_page
+      - if:
+          condition:
+            for:
+              time: 290s
+              condition:
+                  - binary_sensor.is_off: fan_button
+                  - binary_sensor.is_off: water_full_sensor
+                  - binary_sensor.is_off: timer_button
+                  - binary_sensor.is_off: start_stop
+                  - binary_sensor.is_off: humidity_button
+          then:
+            - light.turn_on:
+                id: back_light
+                brightness: 50%
+
+
